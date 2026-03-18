@@ -199,6 +199,11 @@ if $RUN_OPENCLAW; then
     else
         log "  Gateway may have failed — check: tail -f /tmp/openclaw-gateway.log"
     fi
+
+    # Grab the dashboard URL (includes the auth token in the fragment)
+    DASHBOARD_URL=$(openclaw dashboard --no-open 2>/dev/null | grep -o 'http://[^ ]*' | head -1)
+    # Rewrite localhost to the public IP for the SSH tunnel hint
+    DASHBOARD_URL_REMOTE="${DASHBOARD_URL/localhost/$PUBLIC_IP}"
 fi
 
 # =============================================================================
@@ -217,8 +222,19 @@ if $RUN_SGLANG; then
     log "  Tail SGLang logs : docker logs -f $CONTAINER_NAME"
 fi
 if $RUN_OPENCLAW; then
-    log "  Browser UI   : http://localhost:18789"
-    log "  SSH tunnel   : ssh -N -L 18789:127.0.0.1:18789 root@$PUBLIC_IP"
+    log ""
+    log "  ---- Connect to the browser UI ----"
+    log "  1. Run this SSH tunnel on your local machine:"
+    log "     ssh -N -L 18789:127.0.0.1:18789 root@$PUBLIC_IP"
+    log ""
+    if [[ -n "${DASHBOARD_URL:-}" ]]; then
+        log "  2. Open this URL (token included):"
+        log "     $DASHBOARD_URL"
+    else
+        log "  2. Open: http://localhost:18789"
+        log "     (run 'openclaw dashboard' on the server to get the token URL)"
+    fi
+    log ""
     log "  Gateway logs : tail -f /tmp/openclaw-gateway.log"
     log "  Status       : openclaw status"
 fi
