@@ -5,7 +5,7 @@ One command to launch a [SGLang](https://github.com/sgl-project/sglang) inferenc
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh)
 ```
 
 That's it. The script will:
@@ -25,10 +25,10 @@ That's it. The script will:
 
 ## Options
 
-Pass flags after the script URL using `bash -s --`:
+Pass flags after the script URL:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh | bash -s -- [options]
+bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh) [options]
 ```
 
 | Option | Default | Description |
@@ -47,17 +47,17 @@ curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/s
 
 Custom API key and port:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh | bash -s -- --api-key my-secret-key --port 8080
+bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh) --api-key my-secret-key --port 8080
 ```
 
 SGLang only (skip OpenClaw):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh | bash -s -- --sglang-only
+bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh) --sglang-only
 ```
 
 OpenClaw only (SGLang already running):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh | bash -s -- --openclaw-only
+bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh) --openclaw-only
 ```
 
 ## After Setup

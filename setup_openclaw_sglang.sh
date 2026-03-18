@@ -167,11 +167,11 @@ if $RUN_OPENCLAW; then
 
     # ---- Configure via openclaw config set (correct key names) ---------------
     log "  Configuring OpenClaw..."
-    openclaw config set gateway.mode local
-    openclaw config set agents.defaults.model "$SERVED_NAME"
-    openclaw config set agents.defaults.provider openai
-    openclaw config set providers.openai.baseUrl "$BASE_URL"
-    openclaw config set providers.openai.apiKey "$API_KEY"
+    openclaw config set gateway.mode local                        || true
+    openclaw config set agents.defaults.model "$SERVED_NAME"     || true
+    openclaw config set agents.defaults.provider openai          || true
+    openclaw config set providers.openai.baseUrl "$BASE_URL"     || true
+    openclaw config set providers.openai.apiKey "$API_KEY"       || true
 
     # Fix state directory permissions
     chmod 700 "$HOME/.openclaw" 2>/dev/null || true
@@ -229,5 +229,10 @@ if $RUN_OPENCLAW; then
     log "  (Press Ctrl+C to exit)"
     log ""
     sleep 1
-    openclaw
+    # Re-attach stdin to the terminal in case we were piped via curl | bash
+    if [[ ! -t 0 ]]; then
+        exec openclaw </dev/tty
+    else
+        openclaw
+    fi
 fi
