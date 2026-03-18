@@ -165,13 +165,28 @@ if $RUN_OPENCLAW; then
     log "    Key  : $API_KEY"
     log ""
 
-    # ---- Configure via openclaw config set (correct key names) ---------------
+    # ---- Configure via openclaw config set + direct JSON for models provider --
     log "  Configuring OpenClaw..."
-    openclaw config set gateway.mode local                        || true
-    openclaw config set agents.defaults.model "$SERVED_NAME"     || true
-    openclaw config set agents.defaults.provider openai          || true
-    openclaw config set providers.openai.baseUrl "$BASE_URL"     || true
-    openclaw config set providers.openai.apiKey "$API_KEY"       || true
+    openclaw config set gateway.mode local || true
+    # agents.defaults.model uses "provider/model-id" format
+    openclaw config set agents.defaults.model "sglang/${SERVED_NAME}" || true
+
+    # models.providers requires a nested structure with a models[] array —
+    # config set can't build arrays, so write it directly into the JSON
+    CONFIG_FILE="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
+    node - <<JSEOF
+const fs = require('fs');
+const cfg = JSON.parse(fs.readFileSync('${CONFIG_FILE}', 'utf8'));
+cfg.models = cfg.models || {};
+cfg.models.providers = cfg.models.providers || {};
+cfg.models.providers.sglang = {
+  baseUrl: "${BASE_URL}",
+  apiKey: "${API_KEY}",
+  models: [{ id: "${SERVED_NAME}", name: "${SERVED_NAME}", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 131072, maxTokens: 8192 }]
+};
+fs.writeFileSync('${CONFIG_FILE}', JSON.stringify(cfg, null, 2));
+console.log('  models.providers.sglang configured.');
+JSEOF
 
     # Fix state directory permissions
     chmod 700 "$HOME/.openclaw" 2>/dev/null || true
