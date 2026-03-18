@@ -165,39 +165,40 @@ if $RUN_OPENCLAW; then
     log "    Key  : $API_KEY"
     log ""
 
-    OPENCLAW_PROVIDER=openai \
-    OPENCLAW_BASE_URL="$BASE_URL" \
-    OPENCLAW_API_KEY="$API_KEY" \
-    OPENCLAW_MODEL="$SERVED_NAME" \
-    openclaw onboard --non-interactive \
-      --provider openai \
-      --base-url "$BASE_URL" \
-      --api-key "$API_KEY" \
-      --model "$SERVED_NAME" 2>/dev/null || true
+    # ---- Configure via openclaw config set (correct key names) ---------------
+    log "  Configuring OpenClaw..."
+    openclaw config set gateway.mode local
+    openclaw config set agents.defaults.model "$SERVED_NAME"
+    openclaw config set agents.defaults.provider openai
+    openclaw config set providers.openai.baseUrl "$BASE_URL"
+    openclaw config set providers.openai.apiKey "$API_KEY"
 
-    # Fallback: write config directly if onboard command doesn't support flags
-    CONFIG_FILE="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-    if [[ ! -f "$CONFIG_FILE" ]] || ! grep -q "$SERVED_NAME" "$CONFIG_FILE" 2>/dev/null; then
-        log "  Writing OpenClaw config directly to $CONFIG_FILE ..."
-        mkdir -p "$(dirname "$CONFIG_FILE")"
-        cat > "$CONFIG_FILE" << JSON
-{
-  "defaultAgentModel": "$SERVED_NAME",
-  "providers": {
-    "openai": {
-      "baseUrl": "$BASE_URL",
-      "apiKey": "$API_KEY"
-    }
-  }
-}
-JSON
+    # Fix state directory permissions
+    chmod 700 "$HOME/.openclaw" 2>/dev/null || true
+    chmod 600 "$HOME/.openclaw/openclaw.json" 2>/dev/null || true
+
+    # Create required session store dir
+    mkdir -p "$HOME/.openclaw/agents/main/sessions"
+
+    # Fix any remaining doctor issues
+    log "  Running openclaw doctor --fix..."
+    openclaw doctor --fix 2>/dev/null || true
+
+    # Install and start the gateway service
+    log "  Installing OpenClaw gateway service..."
+    openclaw gateway install 2>/dev/null || true
+
+    log "  Starting OpenClaw gateway..."
+    pkill -9 -f openclaw-gateway 2>/dev/null || true
+    nohup openclaw gateway run --bind loopback --port 18789 --force \
+      > /tmp/openclaw-gateway.log 2>&1 &
+    GATEWAY_PID=$!
+    sleep 3
+    if kill -0 $GATEWAY_PID 2>/dev/null; then
+        log "  Gateway running (PID $GATEWAY_PID). Logs: tail -f /tmp/openclaw-gateway.log"
+    else
+        log "  Gateway may have failed — check: tail -f /tmp/openclaw-gateway.log"
     fi
-
-    log "  Starting OpenClaw gateway service..."
-    openclaw gateway start 2>/dev/null || true
-
-    log "  Running openclaw doctor..."
-    openclaw doctor 2>/dev/null || true
 fi
 
 # =============================================================================
@@ -216,7 +217,17 @@ if $RUN_SGLANG; then
     log "  Tail SGLang logs : docker logs -f $CONTAINER_NAME"
 fi
 if $RUN_OPENCLAW; then
-    log "  OpenClaw UI   : openclaw dashboard"
-    log "  Status check  : openclaw status"
+    log "  Chat in terminal : openclaw"
+    log "  Browser UI       : openclaw dashboard  (then SSH tunnel: ssh -N -L 18789:127.0.0.1:18789 root@$PUBLIC_IP)"
+    log "  Gateway logs     : tail -f /tmp/openclaw-gateway.log"
+    log "  Status check     : openclaw status"
 fi
 log "============================================================"
+if $RUN_OPENCLAW; then
+    log ""
+    log "  Launching Hatch TUI — type your first message to start chatting."
+    log "  (Press Ctrl+C to exit)"
+    log ""
+    sleep 1
+    openclaw
+fi
