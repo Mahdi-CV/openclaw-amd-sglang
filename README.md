@@ -5,7 +5,7 @@ One command to launch a [SGLang](https://github.com/sgl-project/sglang) inferenc
 ## Quick Start
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh)
+curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh | bash
 ```
 
 That's it. The script will:
@@ -15,6 +15,7 @@ That's it. The script will:
 3. Install OpenClaw via npm (installs Node 22 if needed)
 4. Configure OpenClaw to point at the SGLang endpoint automatically
 5. Start the OpenClaw gateway
+6. Drop you into the Hatch TUI so you can start chatting immediately
 
 ## Requirements
 
@@ -25,10 +26,10 @@ That's it. The script will:
 
 ## Options
 
-Pass flags after the script URL:
+Pass flags after the script:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh) [options]
+curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh | bash -s -- [options]
 ```
 
 | Option | Default | Description |
@@ -47,17 +48,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang
 
 Custom API key and port:
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh) --api-key my-secret-key --port 8080
+curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh | bash -s -- --api-key my-secret-key --port 8080
 ```
 
 SGLang only (skip OpenClaw):
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh) --sglang-only
+curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh | bash -s -- --sglang-only
 ```
 
 OpenClaw only (SGLang already running):
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh) --openclaw-only
+curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/setup_openclaw_sglang.sh | bash -s -- --openclaw-only
 ```
 
 ## After Setup
@@ -66,8 +67,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang
 # Check OpenClaw status
 openclaw status
 
-# Open the browser UI
-openclaw dashboard
+# Open the browser UI (run this on your local machine)
+ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
+# then open http://localhost:18789 in your browser
 
 # Tail SGLang logs
 docker logs -f sglang_server
