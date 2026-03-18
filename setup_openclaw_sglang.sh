@@ -1,0 +1,222 @@
+#!/bin/bash
+# =============================================================================
+# setup_openclaw_sglang.sh
+#
+# All-in-one: launches SGLang (Qwen3.5-122B) + installs & configures OpenClaw
+# in a single run. No manual steps required.
+#
+# Usage:
+#   bash setup_openclaw_sglang.sh [options]
+#
+# Options:
+#   --port PORT          SGLang port (default: 8090)
+#   --api-key KEY        SGLang API key (default: abc-123)
+#   --model MODEL_PATH   HuggingFace model path (default: Qwen/Qwen3.5-122B-A10B-FP8)
+#   --served-name NAME   Served model name (default: qwen3-5-122b)
+#   --hf-cache PATH      HuggingFace cache dir (default: /data/hf_cache)
+#   --tp-size N          Tensor parallel size (default: 1)
+#   --no-wait            Don't wait for SGLang to be ready before installing OpenClaw
+#   --sglang-only        Only start SGLang, skip OpenClaw install
+#   --openclaw-only      Only install OpenClaw (SGLang assumed already running)
+# =============================================================================
+
+set -euo pipefail
+
+# ---- Defaults ---------------------------------------------------------------
+PORT=8090
+API_KEY="abc-123"
+MODEL="Qwen/Qwen3.5-122B-A10B-FP8"
+SERVED_NAME="qwen3-5-122b"
+HF_CACHE="/data/hf_cache"
+TP_SIZE=1
+IMAGE="lmsysorg/sglang:v0.5.9-rocm700-mi30x"
+CONTAINER_NAME="sglang_server"
+WAIT_FOR_SGLANG=true
+RUN_SGLANG=true
+RUN_OPENCLAW=true
+SGLANG_TIMEOUT=3600  # 1 hour (accounts for Docker image pull + model download ~100GB)
+
+# ---- Parse args -------------------------------------------------------------
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --port)         PORT="$2";         shift 2 ;;
+        --api-key)      API_KEY="$2";      shift 2 ;;
+        --model)        MODEL="$2";        shift 2 ;;
+        --served-name)  SERVED_NAME="$2";  shift 2 ;;
+        --hf-cache)     HF_CACHE="$2";     shift 2 ;;
+        --tp-size)      TP_SIZE="$2";      shift 2 ;;
+        --no-wait)      WAIT_FOR_SGLANG=false; shift ;;
+        --sglang-only)  RUN_OPENCLAW=false; shift ;;
+        --openclaw-only) RUN_SGLANG=false; WAIT_FOR_SGLANG=false; shift ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
+    esac
+done
+
+log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+# ---- Detect public IP -------------------------------------------------------
+PUBLIC_IP=$(curl -sf --max-time 5 ifconfig.me || curl -sf --max-time 5 api.ipify.org || hostname -I | awk '{print $1}')
+BASE_URL="http://${PUBLIC_IP}:${PORT}/v1"
+
+# =============================================================================
+# STEP 1 — Launch SGLang
+# =============================================================================
+if $RUN_SGLANG; then
+    log "============================================================"
+    log " STEP 1: Launching SGLang server"
+    log "============================================================"
+    log "  Model      : $MODEL"
+    log "  Served as  : $SERVED_NAME"
+    log "  Port       : $PORT"
+    log "  TP size    : $TP_SIZE"
+    log "  HF cache   : $HF_CACHE"
+    log "  Container  : $CONTAINER_NAME"
+
+    # Remove any existing container with the same name
+    docker rm -f "$CONTAINER_NAME" 2>/dev/null && log "  Removed existing container."
+
+    mkdir -p "$HF_CACHE"
+
+    docker run -d \
+      --name "$CONTAINER_NAME" \
+      --device=/dev/kfd --device=/dev/dri \
+      --ipc=host --shm-size 32G \
+      --group-add video --cap-add=SYS_PTRACE \
+      --security-opt seccomp=unconfined \
+      -p "${PORT}:${PORT}" \
+      -v "${HF_CACHE}:/root/.cache/huggingface" \
+      "$IMAGE" \
+      python3 -m sglang.launch_server \
+        --model-path "$MODEL" \
+        --served-model-name "$SERVED_NAME" \
+        --host 0.0.0.0 \
+        --port "$PORT" \
+        --tp-size "$TP_SIZE" \
+        --api-key "$API_KEY" \
+        --mem-fraction-static 0.85 \
+        --attention-backend triton \
+        --reasoning-parser qwen3 \
+        --tool-call-parser qwen3_coder \
+        --trust-remote-code
+
+    log "  Container started. ID: $(docker ps -q --filter name=$CONTAINER_NAME)"
+
+    if $WAIT_FOR_SGLANG; then
+        log "  Waiting for SGLang health endpoint (up to ${SGLANG_TIMEOUT}s, includes model download)..."
+        deadline=$(( $(date +%s) + SGLANG_TIMEOUT ))
+        last_log=$(date +%s)
+        while [[ $(date +%s) -lt $deadline ]]; do
+            if curl -sf "http://localhost:${PORT}/health" &>/dev/null; then
+                log "  SGLang is ready! ($(( $(date +%s) - (deadline - SGLANG_TIMEOUT) ))s elapsed)"
+                break
+            fi
+            state=$(docker inspect --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || echo "gone")
+            if [[ "$state" != "running" ]]; then
+                log "  ERROR: Container stopped unexpectedly. Last logs:"
+                docker logs "$CONTAINER_NAME" --tail 20
+                exit 1
+            fi
+            now=$(date +%s)
+            if (( now - last_log >= 60 )); then
+                log "  Still loading... $(( now - (deadline - SGLANG_TIMEOUT) ))s elapsed"
+                last_log=$now
+            fi
+            sleep 10
+        done
+        if ! curl -sf "http://localhost:${PORT}/health" &>/dev/null; then
+            log "  ERROR: SGLang did not become ready within ${SGLANG_TIMEOUT}s."
+            docker logs "$CONTAINER_NAME" --tail 30
+            exit 1
+        fi
+    else
+        log "  Skipping wait (--no-wait). OpenClaw install will proceed immediately."
+    fi
+fi
+
+# =============================================================================
+# STEP 2 — Install OpenClaw and auto-configure it non-interactively
+# =============================================================================
+if $RUN_OPENCLAW; then
+    log ""
+    log "============================================================"
+    log " STEP 2: Installing OpenClaw"
+    log "============================================================"
+
+    # Install Node 22+ if missing or too old
+    NODE_MAJOR=$(node --version 2>/dev/null | sed 's/v\([0-9]*\).*/\1/' || echo "0")
+    if [[ "$NODE_MAJOR" -lt 22 ]]; then
+        log "  Node $NODE_MAJOR detected — installing Node 22 LTS..."
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+        apt-get install -y nodejs
+    else
+        log "  Node $(node --version) detected — OK."
+    fi
+
+    log "  Installing openclaw npm package..."
+    SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
+
+    log "  OpenClaw installed: $(openclaw --version 2>/dev/null || echo 'version unknown')"
+
+    # ---- Non-interactive onboarding via environment variables ---------------
+    log ""
+    log "  Configuring OpenClaw to connect to SGLang at:"
+    log "    URL  : $BASE_URL"
+    log "    Model: $SERVED_NAME"
+    log "    Key  : $API_KEY"
+    log ""
+
+    OPENCLAW_PROVIDER=openai \
+    OPENCLAW_BASE_URL="$BASE_URL" \
+    OPENCLAW_API_KEY="$API_KEY" \
+    OPENCLAW_MODEL="$SERVED_NAME" \
+    openclaw onboard --non-interactive \
+      --provider openai \
+      --base-url "$BASE_URL" \
+      --api-key "$API_KEY" \
+      --model "$SERVED_NAME" 2>/dev/null || true
+
+    # Fallback: write config directly if onboard command doesn't support flags
+    CONFIG_FILE="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
+    if [[ ! -f "$CONFIG_FILE" ]] || ! grep -q "$SERVED_NAME" "$CONFIG_FILE" 2>/dev/null; then
+        log "  Writing OpenClaw config directly to $CONFIG_FILE ..."
+        mkdir -p "$(dirname "$CONFIG_FILE")"
+        cat > "$CONFIG_FILE" << JSON
+{
+  "defaultAgentModel": "$SERVED_NAME",
+  "providers": {
+    "openai": {
+      "baseUrl": "$BASE_URL",
+      "apiKey": "$API_KEY"
+    }
+  }
+}
+JSON
+    fi
+
+    log "  Starting OpenClaw gateway service..."
+    openclaw gateway start 2>/dev/null || true
+
+    log "  Running openclaw doctor..."
+    openclaw doctor 2>/dev/null || true
+fi
+
+# =============================================================================
+# Summary
+# =============================================================================
+log ""
+log "============================================================"
+log " Setup complete!"
+log "============================================================"
+if $RUN_SGLANG; then
+    log "  SGLang server : http://localhost:${PORT}"
+    log "  OpenAI URL    : $BASE_URL"
+    log "  API key       : $API_KEY"
+    log "  Model name    : $SERVED_NAME"
+    log ""
+    log "  Tail SGLang logs : docker logs -f $CONTAINER_NAME"
+fi
+if $RUN_OPENCLAW; then
+    log "  OpenClaw UI   : openclaw dashboard"
+    log "  Status check  : openclaw status"
+fi
+log "============================================================"
