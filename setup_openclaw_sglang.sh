@@ -217,22 +217,9 @@ if $RUN_SGLANG; then
     log "  Tail SGLang logs : docker logs -f $CONTAINER_NAME"
 fi
 if $RUN_OPENCLAW; then
-    log "  Chat in terminal : openclaw"
-    log "  Browser UI       : openclaw dashboard  (then SSH tunnel: ssh -N -L 18789:127.0.0.1:18789 root@$PUBLIC_IP)"
-    log "  Gateway logs     : tail -f /tmp/openclaw-gateway.log"
-    log "  Status check     : openclaw status"
+    log "  Browser UI   : http://localhost:18789"
+    log "  SSH tunnel   : ssh -N -L 18789:127.0.0.1:18789 root@$PUBLIC_IP"
+    log "  Gateway logs : tail -f /tmp/openclaw-gateway.log"
+    log "  Status       : openclaw status"
 fi
 log "============================================================"
-if $RUN_OPENCLAW; then
-    log ""
-    log "  Launching Hatch TUI — type your first message to start chatting."
-    log "  (Press Ctrl+C to exit)"
-    log ""
-    sleep 1
-    # Re-attach stdin to the terminal in case we were piped via curl | bash
-    if [[ ! -t 0 ]]; then
-        exec openclaw </dev/tty
-    else
-        openclaw
-    fi
-fi

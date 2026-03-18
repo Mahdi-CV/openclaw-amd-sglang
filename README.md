@@ -15,7 +15,7 @@ That's it. The script will:
 3. Install OpenClaw via npm (installs Node 22 if needed)
 4. Configure OpenClaw to point at the SGLang endpoint automatically
 5. Start the OpenClaw gateway
-6. Drop you into the Hatch TUI so you can start chatting immediately
+6. Print the SSH tunnel command to access the browser UI
 
 ## Requirements
 
