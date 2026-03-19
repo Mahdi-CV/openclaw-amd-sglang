@@ -182,6 +182,7 @@ cfg.models.providers = cfg.models.providers || {};
 cfg.models.providers.sglang = {
   baseUrl: "${BASE_URL}",
   apiKey: "${API_KEY}",
+  api: "openai-completions",
   models: [{ id: "${SERVED_NAME}", name: "${SERVED_NAME}", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 131072, maxTokens: 8192 }]
 };
 fs.writeFileSync('${CONFIG_FILE}', JSON.stringify(cfg, null, 2));
