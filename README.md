@@ -63,16 +63,27 @@ curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/main/s
 
 ## After Setup
 
+The script prints a ready-to-use dashboard URL with the auth token included. To open the browser UI:
+
+1. On your **local machine**, open the SSH tunnel:
+   ```bash
+   ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
+   ```
+2. Open the URL printed by the script (it includes the token), or run on the server:
+   ```bash
+   openclaw dashboard
+   ```
+
+Other useful commands:
 ```bash
 # Check OpenClaw status
 openclaw status
 
-# Open the browser UI (run this on your local machine)
-ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
-# then open http://localhost:18789 in your browser
-
 # Tail SGLang logs
 docker logs -f sglang_server
+
+# Tail gateway logs
+tail -f /tmp/openclaw-gateway.log
 
 # Stop everything
 docker rm -f sglang_server
