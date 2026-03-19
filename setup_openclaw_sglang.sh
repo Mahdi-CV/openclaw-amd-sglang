@@ -199,6 +199,9 @@ JSEOF
     log "  Running openclaw doctor --fix..."
     openclaw doctor --fix 2>/dev/null || true
 
+    # Enable linger so the systemd user service survives SSH logout/reboot
+    loginctl enable-linger "$(whoami)" 2>/dev/null || true
+
     # Install and start the gateway service
     log "  Installing OpenClaw gateway service..."
     openclaw gateway install 2>/dev/null || true
