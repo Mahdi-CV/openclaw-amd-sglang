@@ -258,6 +258,7 @@ if $RUN_OPENCLAW; then
     if [[ "$NODE_MAJOR" -lt 22 ]]; then
         log "  Node $NODE_MAJOR detected — installing Node 22 LTS..."
         curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+        apt-get remove -y libnode-dev nodejs-doc 2>/dev/null || true
         apt-get install -y nodejs
     else
         log "  Node $(node --version) detected — OK."
