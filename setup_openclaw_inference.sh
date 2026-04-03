@@ -12,18 +12,15 @@
 #   --engine sglang|vllm         Inference engine (default: sglang)
 #
 # Model (pick one):
-#   --model-preset PRESET        Qwen3.5 preset — sets model path, served name,
-#                                and context window automatically. Presets:
-#                                  qwen3.5-0.8b  qwen3.5-2b   qwen3.5-4b
-#                                  qwen3.5-9b    qwen3.5-27b  qwen3.5-35b-a3b
-#                                  qwen3.5-122b  qwen3.5-397b
-#   --model MODEL_PATH           HuggingFace model path (overrides preset)
+#   --model-preset PRESET        Qwen3.5 preset. Run without args to see list.
+#   --model MODEL_PATH           HuggingFace model path (custom)
 #   --served-name NAME           Name exposed in the API (default: from preset)
 #
 # Common options:
 #   --port PORT                  Server port (default: 8090)
 #   --api-key KEY                API key (default: abc-123)
-#   --hf-cache PATH              HuggingFace cache dir (default: /data/hf_cache)
+#   --hf-cache PATH              HuggingFace cache dir
+#                                (default: $HOME/.cache/huggingface)
 #   --tp-size N                  Tensor parallel size (default: 1)
 #   --no-wait                    Don't wait for server health before OpenClaw
 #   --server-only                Only start the inference server, skip OpenClaw
@@ -31,6 +28,10 @@
 # =============================================================================
 
 set -euo pipefail
+
+# ---- Helpers ----------------------------------------------------------------
+log()  { echo "[$(date '+%H:%M:%S')] $*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
 
 # ---- Defaults ---------------------------------------------------------------
 ENGINE="sglang"
@@ -40,7 +41,7 @@ SERVED_NAME=""
 CONTEXT_WINDOW=131072
 PORT=8090
 API_KEY="abc-123"
-HF_CACHE="/data/hf_cache"
+HF_CACHE="${HOME}/.cache/huggingface"
 TP_SIZE=1
 WAIT_FOR_SERVER=true
 RUN_SERVER=true
@@ -49,6 +50,39 @@ RUN_OPENCLAW=true
 SGLANG_IMAGE="lmsysorg/sglang:v0.5.9-rocm700-mi30x"
 VLLM_IMAGE="vllm/vllm-openai-rocm:v0.15.0"
 SERVER_TIMEOUT=3600  # 1 hour — accounts for Docker pull + model download
+
+# ---- Preset table -----------------------------------------------------------
+# Parallel arrays — index-matched. Keep in sync.
+PRESET_KEYS=(
+    "qwen3.5-0.8b"
+    "qwen3.5-2b"
+    "qwen3.5-4b"
+    "qwen3.5-9b"
+    "qwen3.5-27b"
+    "qwen3.5-35b-a3b"
+    "qwen3.5-122b"
+    "qwen3.5-397b"
+)
+PRESET_MODELS=(
+    "Qwen/Qwen3.5-0.8B"
+    "Qwen/Qwen3.5-2B"
+    "Qwen/Qwen3.5-4B"
+    "Qwen/Qwen3.5-9B"
+    "Qwen/Qwen3.5-27B"
+    "Qwen/Qwen3.5-35B-A3B"
+    "Qwen/Qwen3.5-122B-A10B-FP8"
+    "Qwen/Qwen3.5-397B-A17B-FP8"
+)
+PRESET_CTX=(262144 262144 262144 262144 262144 262144 131072 131072)
+PRESET_GB=(2 5 9 20 55 20 65 200)
+
+# Set by resolve_preset, used by check_disk_space
+PRESET_NEEDED_GB=0
+
+# Set in main after preset resolution
+CONTAINER_NAME=""
+PUBLIC_IP=""
+BASE_URL=""
 
 # ---- Parse args -------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -68,87 +102,183 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-log() { echo "[$(date '+%H:%M:%S')] $*"; }
-
 # ---- Validate engine --------------------------------------------------------
 if [[ "$ENGINE" != "sglang" && "$ENGINE" != "vllm" ]]; then
     echo "ERROR: --engine must be 'sglang' or 'vllm', got: $ENGINE"
     exit 1
 fi
 
-# ---- Resolve model preset ---------------------------------------------------
-if [[ -n "$MODEL_PRESET" ]]; then
-    case "$MODEL_PRESET" in
-        qwen3.5-0.8b)
-            MODEL="${MODEL:-Qwen/Qwen3.5-0.8B}"
-            SERVED_NAME="${SERVED_NAME:-qwen3.5-0.8b}"
-            CONTEXT_WINDOW=262144
-            ;;
-        qwen3.5-2b)
-            MODEL="${MODEL:-Qwen/Qwen3.5-2B}"
-            SERVED_NAME="${SERVED_NAME:-qwen3.5-2b}"
-            CONTEXT_WINDOW=262144
-            ;;
-        qwen3.5-4b)
-            MODEL="${MODEL:-Qwen/Qwen3.5-4B}"
-            SERVED_NAME="${SERVED_NAME:-qwen3.5-4b}"
-            CONTEXT_WINDOW=262144
-            ;;
-        qwen3.5-9b)
-            MODEL="${MODEL:-Qwen/Qwen3.5-9B}"
-            SERVED_NAME="${SERVED_NAME:-qwen3.5-9b}"
-            CONTEXT_WINDOW=262144
-            ;;
-        qwen3.5-27b)
-            MODEL="${MODEL:-Qwen/Qwen3.5-27B}"
-            SERVED_NAME="${SERVED_NAME:-qwen3.5-27b}"
-            CONTEXT_WINDOW=262144
-            ;;
-        qwen3.5-35b-a3b)
-            MODEL="${MODEL:-Qwen/Qwen3.5-35B-A3B}"
-            SERVED_NAME="${SERVED_NAME:-qwen3.5-35b-a3b}"
-            CONTEXT_WINDOW=262144
-            ;;
-        qwen3.5-122b)
-            MODEL="${MODEL:-Qwen/Qwen3.5-122B-A10B-FP8}"
-            SERVED_NAME="${SERVED_NAME:-qwen3.5-122b}"
-            CONTEXT_WINDOW=131072
-            ;;
-        qwen3.5-397b)
-            MODEL="${MODEL:-Qwen/Qwen3.5-397B-A17B-FP8}"
-            SERVED_NAME="${SERVED_NAME:-qwen3.5-397b}"
-            CONTEXT_WINDOW=131072
-            ;;
-        *)
-            echo "ERROR: Unknown --model-preset '$MODEL_PRESET'."
-            echo "Valid presets: qwen3.5-0.8b, qwen3.5-2b, qwen3.5-4b, qwen3.5-9b,"
-            echo "               qwen3.5-27b, qwen3.5-35b-a3b, qwen3.5-122b, qwen3.5-397b"
-            exit 1
-            ;;
-    esac
-fi
+# =============================================================================
+# Risk acknowledgement
+# =============================================================================
+risk_acknowledgement() {
+    printf '\n'
+    printf '\033[1;33m=================================================================\033[0m\n'
+    printf '\033[1;33m  IMPORTANT — PLEASE READ BEFORE CONTINUING\033[0m\n'
+    printf '\033[1;33m=================================================================\033[0m\n'
+    printf '\n'
+    printf 'OpenClaw is a highly autonomous AI agent. Giving an AI agent\n'
+    printf 'access to a system may result in unpredictable outcomes.\n'
+    printf 'Use of any AMD suggested implementation is at your own risk.\n'
+    printf 'AMD makes no representations or warranties with your use of\n'
+    printf 'an AI agent as described herein.\n'
+    printf '\n'
+    printf '\033[1;33m=================================================================\033[0m\n'
+    printf '\n'
+    printf 'Do you accept and wish to continue? [y/N]: '
+    local accept=""
+    read -r accept < /dev/tty
+    [[ "$accept" =~ ^[Yy] ]] || { log "Exiting."; exit 0; }
+    printf '\n'
+}
 
-# Require a model to be set
-if [[ -z "$MODEL" ]]; then
-    echo "ERROR: Specify --model-preset PRESET or --model MODEL_PATH."
+# =============================================================================
+# Prerequisite checks
+# =============================================================================
+check_docker() {
+    have docker || {
+        log "ERROR: Docker is not installed."
+        log "       Install it: https://docs.docker.com/engine/install/"
+        exit 1
+    }
+    docker info >/dev/null 2>&1 || {
+        log "ERROR: Docker daemon is not running."
+        log "       Start it: sudo systemctl start docker"
+        exit 1
+    }
+    log "  Docker      : OK ($(docker --version | awk '{print $3}' | tr -d ','))"
+}
+
+check_rocm_devices() {
+    [[ -e /dev/kfd ]] || {
+        log "ERROR: /dev/kfd not found — ROCm drivers may not be installed."
+        log "       Install ROCm: https://rocm.docs.amd.com"
+        exit 1
+    }
+    [[ -d /dev/dri ]] || {
+        log "ERROR: /dev/dri not found — ROCm drivers may not be installed."
+        exit 1
+    }
+    log "  ROCm devices: OK (/dev/kfd, /dev/dri present)"
+}
+
+check_gpu() {
+    if have rocm-smi; then
+        local gpu_count
+        gpu_count=$(rocm-smi --showid 2>/dev/null | grep -c 'GPU\[' || echo "?")
+        log "  GPU         : ${gpu_count} AMD GPU(s) detected via rocm-smi"
+    elif have amd-smi; then
+        log "  GPU         : AMD GPU detected via amd-smi"
+    else
+        log "  GPU         : WARNING — rocm-smi/amd-smi not found, cannot verify GPU"
+    fi
+}
+
+# =============================================================================
+# HF cache helpers
+# =============================================================================
+
+# Check if a model (by HF path e.g. "Qwen/Qwen3.5-9B") is already downloaded.
+# A model is considered cached if its blobs directory exists and is non-empty.
+model_is_cached() {
+    local model_path="$1"
+    local org="${model_path%%/*}"
+    local name="${model_path#*/}"
+    local hub_dir="${HF_CACHE}/hub/models--${org}--${name}"
+    [[ -d "${hub_dir}/blobs" ]] && [[ -n "$(ls -A "${hub_dir}/blobs" 2>/dev/null)" ]]
+}
+
+check_disk_space() {
+    local model_path="$1"
+    local needed_gb="$2"
+
+    # If already cached, no download needed
+    if model_is_cached "$model_path"; then
+        log "  Disk        : model already in cache — no download needed"
+        return 0
+    fi
+
+    # Custom model with no size estimate
+    if [[ "$needed_gb" -eq 0 ]]; then
+        log "  Disk        : custom model — cannot estimate download size"
+        return 0
+    fi
+
+    mkdir -p "$HF_CACHE" 2>/dev/null || true
+    local avail_kb avail_gb
+    avail_kb=$(df -k "$HF_CACHE" 2>/dev/null | awk 'NR==2{print $4}' \
+               || df -k / | awk 'NR==2{print $4}')
+    avail_gb=$(( avail_kb / 1048576 ))
+
+    log "  Disk        : ${avail_gb}GB available, ~${needed_gb}GB needed for download"
+    if [[ $avail_gb -lt $needed_gb ]]; then
+        log "  WARNING: Low disk space — download may fail."
+        log "           Use --hf-cache PATH to point to a volume with more space."
+    fi
+}
+
+# =============================================================================
+# Preset resolution + interactive picker
+# =============================================================================
+
+resolve_preset() {
+    local i
+    for i in "${!PRESET_KEYS[@]}"; do
+        if [[ "${PRESET_KEYS[$i]}" == "$MODEL_PRESET" ]]; then
+            MODEL="${MODEL:-${PRESET_MODELS[$i]}}"
+            SERVED_NAME="${SERVED_NAME:-${PRESET_KEYS[$i]}}"
+            CONTEXT_WINDOW="${PRESET_CTX[$i]}"
+            PRESET_NEEDED_GB="${PRESET_GB[$i]}"
+            return 0
+        fi
+    done
+    echo "ERROR: Unknown --model-preset '$MODEL_PRESET'."
+    printf "Valid presets: %s\n" "${PRESET_KEYS[*]}"
     exit 1
-fi
+}
 
-# Derive served name from model path if still unset
-if [[ -z "$SERVED_NAME" ]]; then
-    SERVED_NAME=$(basename "$MODEL" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
-fi
+# Called when neither --model-preset nor --model is given.
+# Scans the HF cache, marks already-downloaded models, and lets the user pick.
+pick_preset() {
+    log "No --model-preset specified."
+    log "Scanning HF cache at: $HF_CACHE"
+    printf '\n'
+    printf '  %-4s %-20s %-32s %6s  %s\n' "No." "Preset" "HuggingFace model" "Size" "Cache"
+    printf '  %-4s %-20s %-32s %6s  %s\n' "---" "------" "-----------------" "----" "-----"
 
-CONTAINER_NAME="${ENGINE}_server"
+    local i
+    for i in "${!PRESET_KEYS[@]}"; do
+        local cached_tag=""
+        model_is_cached "${PRESET_MODELS[$i]}" && cached_tag="\033[0;32m[cached]\033[0m"
+        printf "  [%d]  %-20s %-32s ~%3dGB  %b\n" \
+            "$(( i + 1 ))" \
+            "${PRESET_KEYS[$i]}" \
+            "${PRESET_MODELS[$i]}" \
+            "${PRESET_GB[$i]}" \
+            "$cached_tag"
+    done
 
-# ---- Detect public IP -------------------------------------------------------
-PUBLIC_IP=$(curl -sf --max-time 5 ifconfig.me || curl -sf --max-time 5 api.ipify.org || hostname -I | awk '{print $1}')
-BASE_URL="http://${PUBLIC_IP}:${PORT}/v1"
+    printf '\n'
+    printf 'Select [1-%d]: ' "${#PRESET_KEYS[@]}"
+    local choice
+    read -r choice < /dev/tty
+    printf '\n'
+
+    if [[ "$choice" =~ ^[0-9]+$ ]] && \
+       [[ "$choice" -ge 1 ]] && \
+       [[ "$choice" -le "${#PRESET_KEYS[@]}" ]]; then
+        MODEL_PRESET="${PRESET_KEYS[$((choice - 1))]}"
+        log "Selected: $MODEL_PRESET"
+    else
+        log "ERROR: Invalid selection. Use --model-preset PRESET to specify directly."
+        exit 1
+    fi
+}
 
 # =============================================================================
 # STEP 1 — Launch inference server
 # =============================================================================
-if $RUN_SERVER; then
+launch_server() {
     log "============================================================"
     log " STEP 1: Launching $ENGINE server"
     log "============================================================"
@@ -159,6 +289,12 @@ if $RUN_SERVER; then
     log "  TP size    : $TP_SIZE"
     log "  HF cache   : $HF_CACHE"
     log "  Container  : $CONTAINER_NAME"
+
+    if model_is_cached "$MODEL"; then
+        log "  Cache      : model found — starting without download"
+    else
+        log "  Cache      : model not cached — will download on first run"
+    fi
 
     docker rm -f "$CONTAINER_NAME" 2>/dev/null && log "  Removed existing container." || true
     mkdir -p "$HF_CACHE"
@@ -214,6 +350,7 @@ if $RUN_SERVER; then
 
     if $WAIT_FOR_SERVER; then
         log "  Waiting for $ENGINE health endpoint (up to ${SERVER_TIMEOUT}s)..."
+        local deadline last_log now
         deadline=$(( $(date +%s) + SERVER_TIMEOUT ))
         last_log=$(date +%s)
         while [[ $(date +%s) -lt $deadline ]]; do
@@ -221,6 +358,7 @@ if $RUN_SERVER; then
                 log "  $ENGINE is ready! ($(( $(date +%s) - (deadline - SERVER_TIMEOUT) ))s elapsed)"
                 break
             fi
+            local state
             state=$(docker inspect --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || echo "gone")
             if [[ "$state" != "running" ]]; then
                 log "  ERROR: Container stopped unexpectedly. Last logs:"
@@ -240,20 +378,20 @@ if $RUN_SERVER; then
             exit 1
         fi
     else
-        log "  Skipping wait (--no-wait). OpenClaw install will proceed immediately."
+        log "  Skipping wait (--no-wait)."
     fi
-fi
+}
 
 # =============================================================================
 # STEP 2 — Install & configure OpenClaw
 # =============================================================================
-if $RUN_OPENCLAW; then
+install_openclaw() {
     log ""
     log "============================================================"
     log " STEP 2: Installing OpenClaw"
     log "============================================================"
 
-    # Install Node 22+ if missing or too old
+    local NODE_MAJOR
     NODE_MAJOR=$(node --version 2>/dev/null | sed 's/v\([0-9]*\).*/\1/' || echo "0")
     if [[ "$NODE_MAJOR" -lt 22 ]]; then
         log "  Node $NODE_MAJOR detected — installing Node 22 LTS..."
@@ -261,24 +399,23 @@ if $RUN_OPENCLAW; then
         apt-get remove -y libnode-dev nodejs-doc 2>/dev/null || true
         apt-get install -y nodejs
     else
-        log "  Node $(node --version) detected — OK."
+        log "  Node $(node --version) — OK"
     fi
 
     log "  Installing openclaw npm package..."
     SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
-    log "  OpenClaw installed: $(openclaw --version 2>/dev/null || echo 'version unknown')"
+    log "  OpenClaw: $(openclaw --version 2>/dev/null || echo 'installed')"
 
     log ""
     log "  Configuring OpenClaw:"
     log "    Engine : $ENGINE"
     log "    URL    : $BASE_URL"
     log "    Model  : $SERVED_NAME"
-    log ""
 
     openclaw config set gateway.mode local || true
     openclaw config set agents.defaults.model "${ENGINE}/${SERVED_NAME}" || true
 
-    CONFIG_FILE="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
+    local CONFIG_FILE="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
     node - <<JSEOF
 const fs = require('fs');
 const cfg = JSON.parse(fs.readFileSync('${CONFIG_FILE}', 'utf8'));
@@ -316,48 +453,103 @@ JSEOF
     pkill -9 -f openclaw-gateway 2>/dev/null || true
     nohup openclaw gateway run --bind loopback --port 18789 --force \
       > /tmp/openclaw-gateway.log 2>&1 &
-    GATEWAY_PID=$!
+    local GATEWAY_PID=$!
     sleep 3
     if kill -0 $GATEWAY_PID 2>/dev/null; then
-        log "  Gateway running (PID $GATEWAY_PID). Logs: tail -f /tmp/openclaw-gateway.log"
+        log "  Gateway running (PID $GATEWAY_PID)"
     else
         log "  Gateway may have failed — check: tail -f /tmp/openclaw-gateway.log"
     fi
-
-    DASHBOARD_URL=$(openclaw dashboard --no-open 2>/dev/null | grep -o 'http://[^ ]*' | head -1 || true)
-fi
+}
 
 # =============================================================================
-# Summary
+# Main
 # =============================================================================
-log ""
-log "============================================================"
-log " Setup complete!"
-log "============================================================"
-if $RUN_SERVER; then
-    log "  Engine        : $ENGINE"
-    log "  Server URL    : http://localhost:${PORT}"
-    log "  OpenAI URL    : $BASE_URL"
-    log "  API key       : $API_KEY"
-    log "  Model name    : $SERVED_NAME"
-    log ""
-    log "  Server logs   : docker logs -f $CONTAINER_NAME"
-fi
-if $RUN_OPENCLAW; then
-    log ""
-    log "  ---- Connect to the browser UI ----"
-    log "  1. Run this SSH tunnel on your local machine:"
-    log "     ssh -N -L 18789:127.0.0.1:18789 amd@$PUBLIC_IP"
-    log ""
-    if [[ -n "${DASHBOARD_URL:-}" ]]; then
-        log "  2. Open this URL (token included):"
-        log "     $DASHBOARD_URL"
-    else
-        log "  2. Open: http://localhost:18789"
-        log "     (run 'openclaw dashboard' on the server to get the token URL)"
+main() {
+    risk_acknowledgement
+
+    # Prerequisites — only needed when launching a server container
+    if $RUN_SERVER; then
+        log "============================================================"
+        log " Checking prerequisites"
+        log "============================================================"
+        check_docker
+        check_rocm_devices
+        check_gpu
     fi
+
+    # Model resolution — interactive picker if nothing specified
+    if [[ -z "$MODEL_PRESET" && -z "$MODEL" ]]; then
+        pick_preset
+    fi
+    if [[ -n "$MODEL_PRESET" ]]; then
+        resolve_preset
+    fi
+
+    [[ -z "$MODEL" ]] && {
+        log "ERROR: Specify --model-preset PRESET or --model MODEL_PATH."
+        exit 1
+    }
+
+    # Derive served name from model path if still unset
+    [[ -z "$SERVED_NAME" ]] && \
+        SERVED_NAME=$(basename "$MODEL" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
+
+    CONTAINER_NAME="${ENGINE}_server"
+    PUBLIC_IP=$(curl -sf --max-time 5 ifconfig.me \
+                || curl -sf --max-time 5 api.ipify.org \
+                || hostname -I | awk '{print $1}')
+    BASE_URL="http://${PUBLIC_IP}:${PORT}/v1"
+
+    # Disk space check — runs after model is known, skips if already cached
+    if $RUN_SERVER; then
+        check_disk_space "$MODEL" "$PRESET_NEEDED_GB"
+    fi
+
+    if $RUN_SERVER; then
+        launch_server
+    fi
+
+    if $RUN_OPENCLAW; then
+        install_openclaw
+    fi
+
+    # Summary
+    local DASHBOARD_URL=""
+    if $RUN_OPENCLAW; then
+        DASHBOARD_URL=$(openclaw dashboard --no-open 2>/dev/null \
+                        | grep -o 'http://[^ ]*' | head -1 || true)
+    fi
+
     log ""
-    log "  Gateway logs  : tail -f /tmp/openclaw-gateway.log"
-    log "  Status        : openclaw status"
-fi
-log "============================================================"
+    log "============================================================"
+    log " Setup complete!"
+    log "============================================================"
+    if $RUN_SERVER; then
+        log "  Engine        : $ENGINE"
+        log "  Server URL    : http://localhost:${PORT}"
+        log "  OpenAI URL    : $BASE_URL"
+        log "  API key       : $API_KEY"
+        log "  Model name    : $SERVED_NAME"
+        log ""
+        log "  Server logs   : docker logs -f $CONTAINER_NAME"
+    fi
+    if $RUN_OPENCLAW; then
+        log ""
+        log "  ---- Connect to the browser UI ----"
+        log "  1. SSH tunnel : ssh -N -L 18789:127.0.0.1:18789 amd@$PUBLIC_IP"
+        log ""
+        if [[ -n "${DASHBOARD_URL:-}" ]]; then
+            log "  2. Open: $DASHBOARD_URL"
+        else
+            log "  2. Open: http://localhost:18789"
+            log "     (run 'openclaw dashboard' on the server to get the token URL)"
+        fi
+        log ""
+        log "  Gateway logs  : tail -f /tmp/openclaw-gateway.log"
+        log "  Status        : openclaw status"
+    fi
+    log "============================================================"
+}
+
+main "$@"
