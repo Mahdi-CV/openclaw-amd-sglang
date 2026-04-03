@@ -46,6 +46,7 @@ TP_SIZE=1
 WAIT_FOR_SERVER=true
 RUN_SERVER=true
 RUN_OPENCLAW=true
+YES=false  # skip interactive prompts (--yes flag or CI use)
 
 SGLANG_IMAGE="lmsysorg/sglang:v0.5.9-rocm700-mi30x"
 VLLM_IMAGE="vllm/vllm-openai-rocm:v0.15.0"
@@ -98,6 +99,7 @@ while [[ $# -gt 0 ]]; do
         --no-wait)       WAIT_FOR_SERVER=false; shift ;;
         --server-only)   RUN_OPENCLAW=false; shift ;;
         --openclaw-only) RUN_SERVER=false; WAIT_FOR_SERVER=false; shift ;;
+        --yes|-y)        YES=true; shift ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -125,6 +127,10 @@ risk_acknowledgement() {
     printf '\n'
     printf '\033[1;33m=================================================================\033[0m\n'
     printf '\n'
+    if $YES; then
+        log "Risk accepted (--yes)"
+        return 0
+    fi
     printf 'Do you accept and wish to continue? [y/N]: '
     local accept=""
     read -r accept < /dev/tty
