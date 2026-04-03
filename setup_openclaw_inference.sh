@@ -32,6 +32,17 @@ set -euo pipefail
 # ---- Helpers ----------------------------------------------------------------
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
+die()  { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
+
+print_banner() {
+    printf '\033[1;31m░████░░█░░░█░█████░░████░█░░░█░░░░░████░░▀█▀░░████░░████░░▀█▀\033[0m\n'
+    printf '\033[1;31m█░░░█░░█░░░█░░░█░░░█░░░░░█░██░░░░░█░░░░░░█░░░█░░░█░█░░░█░░█░\033[0m\n'
+    printf '\033[1;31m█░░░█░░█░░░█░░░█░░░█░░░░░██░░░░░░░░███░░░█░░░█████░████░░░█░\033[0m\n'
+    printf '\033[1;31m█░█░█░░█░░░█░░░█░░░█░░░░░█░██░░░░░░░░░█░░█░░░█░░░█░█░░█░░░█░\033[0m\n'
+    printf '\033[1;31m░█░█░░░░███░░░█░░░░████░█░░░█░░░░░████░░░█░░░█░░░█░█░░░█░░█░\033[0m\n'
+    printf '\033[1;33m    🦞  OpenClaw on AMD (SGLang / vLLM)  🦞\033[0m\n'
+    printf '\n'
+}
 
 # ---- Defaults ---------------------------------------------------------------
 ENGINE="sglang"
@@ -119,11 +130,13 @@ risk_acknowledgement() {
     printf '\033[1;33m  IMPORTANT — PLEASE READ BEFORE CONTINUING\033[0m\n'
     printf '\033[1;33m=================================================================\033[0m\n'
     printf '\n'
-    printf 'OpenClaw is a highly autonomous AI agent. Giving an AI agent\n'
-    printf 'access to a system may result in unpredictable outcomes.\n'
-    printf 'Use of any AMD suggested implementation is at your own risk.\n'
-    printf 'AMD makes no representations or warranties with your use of\n'
-    printf 'an AI agent as described herein.\n'
+    printf '\033[1;33mOpenClaw is a highly autonomous AI agent. Giving any AI agent\033[0m\n'
+    printf '\033[1;33maccess to any system may result in the AI acting in unpredictable\033[0m\n'
+    printf '\033[1;33mways with unpredictable/unforeseen outcomes. Use of any AMD\033[0m\n'
+    printf '\033[1;33msuggested implementations is made at your own risk. AMD makes no\033[0m\n'
+    printf '\033[1;33mrepresentations/warranties with your use of an AI agent as\033[0m\n'
+    printf '\033[1;33mdescribed herein. Failure to exercise appropriate caution may\033[0m\n'
+    printf '\033[1;33mresult in damages (foreseen and/or unforeseen).\033[0m\n'
     printf '\n'
     printf '\033[1;33m=================================================================\033[0m\n'
     printf '\n'
@@ -134,7 +147,7 @@ risk_acknowledgement() {
     printf 'Do you accept and wish to continue? [y/N]: '
     local accept=""
     read -r accept < /dev/tty
-    [[ "$accept" =~ ^[Yy] ]] || { log "Exiting."; exit 0; }
+    [[ "$accept" =~ ^[Yy] ]] || die "Risk not accepted. Exiting."
     printf '\n'
 }
 
@@ -472,6 +485,7 @@ JSEOF
 # Main
 # =============================================================================
 main() {
+    print_banner
     risk_acknowledgement
 
     # Prerequisites — only needed when launching a server container
