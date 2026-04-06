@@ -52,11 +52,71 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-log() { echo "[$(date '+%H:%M:%S')] $*"; }
+log()  { echo "[$(date '+%H:%M:%S')] $*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ---- Prerequisite checks ----------------------------------------------------
+check_docker() {
+    have docker || {
+        log "ERROR: Docker is not installed."
+        log "       Install it: https://docs.docker.com/engine/install/"
+        exit 1
+    }
+    docker info >/dev/null 2>&1 || {
+        log "ERROR: Docker daemon is not running."
+        log "       Start it: sudo systemctl start docker"
+        exit 1
+    }
+    log "  Docker : OK ($(docker --version | awk '{print $3}' | tr -d ','))"
+}
+
+check_rocm() {
+    local missing=()
+
+    [[ -e /dev/kfd ]] || missing+=("/dev/kfd")
+    [[ -d /dev/dri ]] || missing+=("/dev/dri")
+    have rocminfo || have rocm-smi || have amd-smi || missing+=("rocm userspace tools")
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        printf '\n'
+        printf '\033[1;31m=================================================================\033[0m\n'
+        printf '\033[1;31m  ROCm NOT DETECTED — Cannot continue\033[0m\n'
+        printf '\033[1;31m=================================================================\033[0m\n'
+        printf '\n'
+        printf '\033[1;31mThe following ROCm components were not found:\033[0m\n'
+        for item in "${missing[@]}"; do
+            printf '\033[1;31m  - %s\033[0m\n' "$item"
+        done
+        printf '\n'
+        printf '\033[1;33mROCm must be installed on the host before running this script.\033[0m\n'
+        printf '\033[1;33mThis script does not install ROCm — it only uses it.\033[0m\n'
+        printf '\n'
+        printf '\033[1;33mPlease follow the AMD ROCm quick-start installation guide:\033[0m\n'
+        printf '\033[1;36m  https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html\033[0m\n'
+        printf '\n'
+        printf '\033[1;33mAfter installing ROCm, re-run this script.\033[0m\n'
+        printf '\033[1;31m=================================================================\033[0m\n'
+        printf '\n'
+        exit 1
+    fi
+
+    log "  ROCm   : OK (/dev/kfd, /dev/dri present)"
+}
 
 # ---- Detect public IP -------------------------------------------------------
 PUBLIC_IP=$(curl -sf --max-time 5 ifconfig.me || curl -sf --max-time 5 api.ipify.org || hostname -I | awk '{print $1}')
 BASE_URL="http://${PUBLIC_IP}:${PORT}/v1"
+
+# =============================================================================
+# Prerequisites
+# =============================================================================
+if $RUN_SGLANG; then
+    log "============================================================"
+    log " Checking prerequisites"
+    log "============================================================"
+    check_docker
+    check_rocm
+fi
 
 # =============================================================================
 # STEP 1 — Launch SGLang

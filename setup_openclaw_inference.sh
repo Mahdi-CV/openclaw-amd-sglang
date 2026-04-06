@@ -46,7 +46,7 @@ print_banner() {
 
 # ---- Defaults ---------------------------------------------------------------
 ENGINE="sglang"
-MODEL_PRESET=""
+MODEL_PRESET="qwen3.5-122b"
 MODEL=""
 SERVED_NAME=""
 CONTEXT_WINDOW=131072
@@ -57,7 +57,11 @@ TP_SIZE=1
 WAIT_FOR_SERVER=true
 RUN_SERVER=true
 RUN_OPENCLAW=true
-YES=false  # skip interactive prompts (--yes flag or CI use)
+
+# Detect interactive mode once at startup.
+# true  = stdin is a real terminal → show prompts
+# false = piped / SSH no-PTY / CI  → auto-accept and use defaults
+[[ -t 0 ]] && INTERACTIVE=true || INTERACTIVE=false
 
 SGLANG_IMAGE="lmsysorg/sglang:v0.5.9-rocm700-mi30x"
 VLLM_IMAGE="vllm/vllm-openai-rocm:v0.15.0"
@@ -110,7 +114,6 @@ while [[ $# -gt 0 ]]; do
         --no-wait)       WAIT_FOR_SERVER=false; shift ;;
         --server-only)   RUN_OPENCLAW=false; shift ;;
         --openclaw-only) RUN_SERVER=false; WAIT_FOR_SERVER=false; shift ;;
-        --yes|-y)        YES=true; shift ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -140,13 +143,13 @@ risk_acknowledgement() {
     printf '\n'
     printf '\033[1;33m=================================================================\033[0m\n'
     printf '\n'
-    if $YES; then
-        log "Risk accepted (--yes)"
+    if ! $INTERACTIVE; then
+        log "Non-interactive session — risk auto-accepted."
         return 0
     fi
     printf 'Do you accept and wish to continue? [y/N]: '
     local accept=""
-    read -r accept < /dev/tty
+    read -r accept
     [[ "$accept" =~ ^[Yy] ]] || die "Risk not accepted. Exiting."
     printf '\n'
 }
@@ -168,17 +171,40 @@ check_docker() {
     log "  Docker      : OK ($(docker --version | awk '{print $3}' | tr -d ','))"
 }
 
-check_rocm_devices() {
-    [[ -e /dev/kfd ]] || {
-        log "ERROR: /dev/kfd not found — ROCm drivers may not be installed."
-        log "       Install ROCm: https://rocm.docs.amd.com"
+check_rocm() {
+    local missing=()
+
+    # Check kernel-level ROCm devices
+    [[ -e /dev/kfd ]] || missing+=("/dev/kfd")
+    [[ -d /dev/dri ]] || missing+=("/dev/dri")
+
+    # Check for ROCm userspace tools
+    have rocminfo || have rocm-smi || have amd-smi || missing+=("rocm userspace tools")
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        printf '\n'
+        printf '\033[1;31m=================================================================\033[0m\n'
+        printf '\033[1;31m  ROCm NOT DETECTED — Cannot continue\033[0m\n'
+        printf '\033[1;31m=================================================================\033[0m\n'
+        printf '\n'
+        printf '\033[1;31mThe following ROCm components were not found:\033[0m\n'
+        for item in "${missing[@]}"; do
+            printf '\033[1;31m  - %s\033[0m\n' "$item"
+        done
+        printf '\n'
+        printf '\033[1;33mROCm must be installed on the host before running this script.\033[0m\n'
+        printf '\033[1;33mThis script does not install ROCm — it only uses it.\033[0m\n'
+        printf '\n'
+        printf '\033[1;33mPlease follow the AMD ROCm quick-start installation guide:\033[0m\n'
+        printf '\033[1;36m  https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html\033[0m\n'
+        printf '\n'
+        printf '\033[1;33mAfter installing ROCm, re-run this script.\033[0m\n'
+        printf '\033[1;31m=================================================================\033[0m\n'
+        printf '\n'
         exit 1
-    }
-    [[ -d /dev/dri ]] || {
-        log "ERROR: /dev/dri not found — ROCm drivers may not be installed."
-        exit 1
-    }
-    log "  ROCm devices: OK (/dev/kfd, /dev/dri present)"
+    fi
+
+    log "  ROCm        : OK (/dev/kfd, /dev/dri present)"
 }
 
 check_gpu() {
@@ -259,6 +285,12 @@ resolve_preset() {
 # Called when neither --model-preset nor --model is given.
 # Scans the HF cache, marks already-downloaded models, and lets the user pick.
 pick_preset() {
+    # Non-interactive: no TTY to prompt on — use the built-in default.
+    if ! $INTERACTIVE; then
+        log "Non-interactive session — using default preset: $MODEL_PRESET"
+        return 0
+    fi
+
     log "No --model-preset specified."
     log "Scanning HF cache at: $HF_CACHE"
     printf '\n'
@@ -280,7 +312,7 @@ pick_preset() {
     printf '\n'
     printf 'Select [1-%d]: ' "${#PRESET_KEYS[@]}"
     local choice
-    read -r choice < /dev/tty
+    read -r choice
     printf '\n'
 
     if [[ "$choice" =~ ^[0-9]+$ ]] && \
@@ -494,7 +526,7 @@ main() {
         log " Checking prerequisites"
         log "============================================================"
         check_docker
-        check_rocm_devices
+        check_rocm
         check_gpu
     fi
 
