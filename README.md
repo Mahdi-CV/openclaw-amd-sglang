@@ -5,10 +5,16 @@ One command to launch an inference server (SGLang or vLLM) with any Qwen3.5 mode
 ## Quick Start
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/multi-engine/setup_openclaw_inference.sh | bash
+```
+
+This runs with the default preset (`qwen3.5-122b`, SGLang engine). To use a different model:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/Mahdi-CV/openclaw-amd-sglang/multi-engine/setup_openclaw_inference.sh | bash -s -- --model-preset qwen3.5-9b
 ```
 
-That's it. The script will:
+The script will:
 
 1. Start the inference server Docker container (port 8090)
 2. Wait for the server to be ready — including Docker image pull and model load (up to 1 hour)
@@ -46,12 +52,12 @@ For a custom model, use `--model Qwen/MyModel --served-name my-model` instead.
 | Option | Default | Description |
 |---|---|---|
 | `--engine sglang\|vllm` | `sglang` | Inference engine |
-| `--model-preset PRESET` | — | Qwen3.5 preset (see table above) |
+| `--model-preset PRESET` | `qwen3.5-122b` | Qwen3.5 preset (see table above) |
 | `--model MODEL_PATH` | — | HuggingFace model path (custom) |
 | `--served-name NAME` | from preset | Model name used in API calls |
 | `--port PORT` | `8090` | Port to expose the server on |
 | `--api-key KEY` | `abc-123` | API key for the endpoint |
-| `--hf-cache PATH` | `/data/hf_cache` | Local path to cache model weights |
+| `--hf-cache PATH` | `$HOME/.cache/huggingface` | Local path to cache model weights |
 | `--tp-size N` | `1` | Tensor parallel size |
 | `--no-wait` | — | Skip waiting for the server before installing OpenClaw |
 | `--server-only` | — | Only start the inference server, skip OpenClaw |
