@@ -46,7 +46,7 @@ print_banner() {
 
 # ---- Defaults ---------------------------------------------------------------
 ENGINE="sglang"
-MODEL_PRESET="qwen3.5-122b"
+MODEL_PRESET=""
 MODEL=""
 SERVED_NAME=""
 CONTEXT_WINDOW=131072
@@ -287,6 +287,7 @@ resolve_preset() {
 pick_preset() {
     # Non-interactive: no TTY to prompt on — use the built-in default.
     if ! $INTERACTIVE; then
+        MODEL_PRESET="qwen3.5-122b"
         log "Non-interactive session — using default preset: $MODEL_PRESET"
         return 0
     fi
