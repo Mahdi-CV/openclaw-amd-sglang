@@ -174,10 +174,18 @@ assert "tools only missing → exit 1 + lists userspace tools" 1 "userspace tool
     "FAKE_TOOL1=no_rocminfo_xxx FAKE_TOOL2=no_rocm_smi_xxx FAKE_TOOL3=no_amd_smi_xxx bash -c '$ROCM_CHECK'"
 
 assert "rocm-smi alone satisfies tools check → OK" 0 "ROCm OK" \
-    "FAKE_TOOL1=no_rocminfo_xxx bash -c '$ROCM_CHECK'"
+    "D=\$(mktemp -d)
+printf '#!/bin/bash\nexit 0\n' > \"\$D/rocm-smi\"
+chmod +x \"\$D/rocm-smi\"
+FAKE_TOOL1=no_rocminfo_xxx PATH=\"\$D:\$PATH\" bash -c '$ROCM_CHECK'
+RC=\$?; rm -rf \"\$D\"; exit \$RC"
 
 assert "amd-smi alone satisfies tools check → OK" 0 "ROCm OK" \
-    "FAKE_TOOL1=no_rocminfo_xxx FAKE_TOOL2=no_rocm_smi_xxx bash -c '$ROCM_CHECK'"
+    "D=\$(mktemp -d)
+printf '#!/bin/bash\nexit 0\n' > \"\$D/amd-smi\"
+chmod +x \"\$D/amd-smi\"
+FAKE_TOOL1=no_rocminfo_xxx FAKE_TOOL2=no_rocm_smi_xxx PATH=\"\$D:\$PATH\" bash -c '$ROCM_CHECK'
+RC=\$?; rm -rf \"\$D\"; exit \$RC"
 
 # On this server ROCm IS present (ROCm check passes), so skip the live error URL test
 skip "error message contains quick-start URL (ROCm present on this server — tested via source)"
@@ -211,11 +219,35 @@ echo "Docker version 99.0.0, build fake"
 EOF
 chmod +x "$FAKE_DOCKER_DIR/docker"
 
+# Fake docker that reports installed AND daemon is up (used in Section 3 and Section 18)
+FAKE_GOOD_DOCKER_DIR="$TMPROOT/fake_good_docker_$$"
+mkdir -p "$FAKE_GOOD_DOCKER_DIR"
+cat > "$FAKE_GOOD_DOCKER_DIR/docker" << 'EOF'
+#!/bin/bash
+if [[ "$1" == "info" ]]; then exit 0; fi
+echo "Docker version 29.0.0, build fake"
+EOF
+chmod +x "$FAKE_GOOD_DOCKER_DIR/docker"
+
+# Fake ROCm userspace tools (rocm-smi) for servers without ROCm CLI installed
+# Used in Section 6 (invalid preset) and Section 18 (integration tests)
+FAKE_ROCM_DIR="$TMPROOT/fake_rocm_$$"
+mkdir -p "$FAKE_ROCM_DIR"
+cat > "$FAKE_ROCM_DIR/rocm-smi" << 'EOF'
+#!/bin/bash
+if [[ "$1" == "--showid" ]]; then printf 'GPU[0]\nGPU[1]\n'; exit 0; fi
+if [[ "$1" == "--version" ]]; then echo "ROCm version: 7.0.0"; exit 0; fi
+exit 0
+EOF
+chmod +x "$FAKE_ROCM_DIR/rocm-smi"
+# Combined PATH for tests that need both fake docker and fake ROCm
+FAKE_ENV_PATH="$FAKE_GOOD_DOCKER_DIR:$FAKE_ROCM_DIR:$PATH"
+
 assert "docker daemon down → exit 1 with systemctl hint" 1 "systemctl start docker" \
     "PATH='$FAKE_DOCKER_DIR:$PATH' bash '$SCRIPT' --server-only < /dev/null 2>&1"
 
 assert "docker installed and running → OK message" 0 "Docker.*OK|29\." \
-    "bash '$SCRIPT' --server-only < /dev/null 2>&1 | { head -80; true; } | grep -iE 'Docker.*OK|Docker.*29'"
+    "PATH='$FAKE_GOOD_DOCKER_DIR:$PATH' bash '$SCRIPT' --server-only < /dev/null 2>&1 | { head -80; true; } | grep -iE 'Docker.*OK|Docker.*29'"
 
 # ============================================================================
 # SECTION 4: Port Availability
@@ -318,10 +350,10 @@ done
 echo \$count"
 
 assert "invalid preset exits 1 with error message" 1 "Unknown.*model-preset|Unknown.*preset" \
-    "bash '$SCRIPT' --model-preset totally-fake-model --server-only < /dev/null 2>&1"
+    "PATH='$FAKE_ENV_PATH' bash '$SCRIPT' --model-preset totally-fake-model --server-only < /dev/null 2>&1"
 
 assert "default preset is qwen3.5-122b" 0 "qwen3.5-122b|122b" \
-    "grep 'MODEL_PRESET=' '$SCRIPT' | head -1"
+    "grep 'MODEL_PRESET.*qwen3.5-122b\|qwen3.5-122b.*MODEL_PRESET' '$SCRIPT' | head -1"
 
 assert "--model custom path used directly" 0 "my-org/my-model" \
     "MODEL='my-org/my-model'; echo \"\$MODEL\""
@@ -649,7 +681,11 @@ fi
 section "16. ROCm Version vs Image Requirement"
 
 assert "rocm-smi version parsed to X.Y.Z format" 0 "[0-9]+\.[0-9]+" \
-    "rocm-smi --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1"
+    "D=\$(mktemp -d)
+printf '#!/bin/bash\necho \"ROCm version: 7.0.0\"\n' > \"\$D/rocm-smi\"
+chmod +x \"\$D/rocm-smi\"
+PATH=\"\$D:\$PATH\" rocm-smi --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+RC=\$?; rm -rf \"\$D\"; exit \$RC"
 
 assert "ROCm 4.x flagged as insufficient for rocm700 image" 0 "WARN|insufficient|old" \
     "ROCM_VER=\$(rocm-smi --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo '0.0')
@@ -688,32 +724,32 @@ section "18. Integration: Full Script Dry-Run (Non-Interactive)"
 assert "script shows banner (non-interactive)" 0 "OpenClaw|AMD|SGLang" \
     "bash '$SCRIPT' --server-only < /dev/null 2>&1 | { head -10; true; }"
 
-# Helper: run script, capture first N lines, ignore SIGPIPE exit code from head
-script_head() { bash "$SCRIPT" "$@" < /dev/null 2>&1 | head -80; true; }
+# Helper: run script with fake working docker, capture first N lines
+GDOCK="PATH='$FAKE_ENV_PATH'"
 
 assert "prerequisite block: Docker OK line present" 0 "Docker.*OK" \
-    "bash '$SCRIPT' --server-only < /dev/null 2>&1 | { head -80; true; } | grep -iE 'Docker.*OK'"
+    "PATH='$FAKE_ENV_PATH' bash '$SCRIPT' --server-only < /dev/null 2>&1 | { head -80; true; } | grep -iE 'Docker.*OK'"
 
 assert "prerequisite block: ROCm OK line present" 0 "ROCm.*OK" \
-    "bash '$SCRIPT' --server-only < /dev/null 2>&1 | { head -80; true; } | grep -iE 'ROCm.*OK'"
+    "PATH='$FAKE_ENV_PATH' bash '$SCRIPT' --server-only < /dev/null 2>&1 | { head -80; true; } | grep -iE 'ROCm.*OK'"
 
 assert "prerequisite block: GPU count present" 0 "GPU|AMD GPU" \
-    "bash '$SCRIPT' --server-only < /dev/null 2>&1 | { head -80; true; } | grep -iE 'GPU'"
+    "PATH='$FAKE_ENV_PATH' bash '$SCRIPT' --server-only < /dev/null 2>&1 | { head -80; true; } | grep -iE 'GPU'"
 
 assert "default model is qwen3.5-122b (shown in launch block)" 0 "122" \
-    "bash '$SCRIPT' --server-only < /dev/null 2>&1 | { head -80; true; } | grep -iE 'Model|122' | head -3"
+    "PATH='$FAKE_ENV_PATH' bash '$SCRIPT' --server-only < /dev/null 2>&1 | { head -80; true; } | grep -iE 'Model|122' | head -3"
 
 assert "--model-preset qwen3.5-0.8b overrides default" 0 "0\.8B|0-8b" \
-    "bash '$SCRIPT' --server-only --model-preset qwen3.5-0.8b < /dev/null 2>&1 | { head -80; true; } | grep -iE '0\.8B|0-8b' | head -2"
+    "PATH='$FAKE_ENV_PATH' bash '$SCRIPT' --server-only --model-preset qwen3.5-0.8b < /dev/null 2>&1 | { head -80; true; } | grep -iE '0\.8B|0-8b' | head -2"
 
 assert "--engine vllm shown in launch output" 0 "vllm" \
-    "bash '$SCRIPT' --server-only --engine vllm --model-preset qwen3.5-0.8b < /dev/null 2>&1 | { head -80; true; } | grep -iE 'vllm|engine' | head -3"
+    "PATH='$FAKE_ENV_PATH' bash '$SCRIPT' --server-only --engine vllm --model-preset qwen3.5-0.8b < /dev/null 2>&1 | { head -80; true; } | grep -iE 'vllm|engine' | head -3"
 
 assert "disk check: model cached → 'already in cache' message" 0 "cache|cached" \
-    "bash '$SCRIPT' --server-only --model-preset qwen3.5-0.8b < /dev/null 2>&1 | { head -80; true; } | grep -iE 'cache|cached' | head -3"
+    "PATH='$FAKE_ENV_PATH' bash '$SCRIPT' --server-only --model-preset qwen3.5-0.8b < /dev/null 2>&1 | { head -80; true; } | grep -iE 'cache|cached' | head -3"
 
 assert "disk check: 397b shows large size warning or size" 0 "200|GB|disk|cache" \
-    "bash '$SCRIPT' --server-only --model-preset qwen3.5-397b < /dev/null 2>&1 | { head -80; true; } | grep -iE '200|GB|disk|cache' | head -3"
+    "PATH='$FAKE_ENV_PATH' bash '$SCRIPT' --server-only --model-preset qwen3.5-397b < /dev/null 2>&1 | { head -80; true; } | grep -iE '200|GB|disk|cache' | head -3"
 
 assert "--openclaw-only skips prereq block" 0 "prereqs skipped" \
     "out=\$(bash '$SCRIPT' --openclaw-only < /dev/null 2>&1 | { head -20; true; })
