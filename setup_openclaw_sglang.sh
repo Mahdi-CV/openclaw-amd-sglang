@@ -219,10 +219,10 @@ JSEOF
         log "  Gateway may have failed — check: tail -f /tmp/openclaw-gateway.log"
     fi
 
-    # Grab the dashboard URL (includes the auth token in the fragment)
-    DASHBOARD_URL=$(openclaw dashboard --no-open 2>/dev/null | grep -o 'http://[^ ]*' | head -1)
-    # Rewrite localhost to the public IP for the SSH tunnel hint
-    DASHBOARD_URL_REMOTE="${DASHBOARD_URL/localhost/$PUBLIC_IP}"
+    # `openclaw dashboard --no-open` no longer prints `#token=...` (clipboard/browser only; often absent over SSH).
+    # Same token string is in openclaw.json — append it here.
+    DASHBOARD_URL="$(node -e 'const fs=require("fs"),p=process.argv[1],d=18789;let n=d,t="";try{const c=JSON.parse(fs.readFileSync(p));if(typeof c.gateway?.port==="number"&&c.gateway.port>0)n=c.gateway.port;if(typeof c.gateway?.auth?.token==="string")t=c.gateway.auth.token.trim();}catch(e){}let u="http://127.0.0.1:"+n+"/";if(t)u+="#token="+encodeURIComponent(t);process.stdout.write(u);' "$CONFIG_FILE")"
+    [[ -z "$DASHBOARD_URL" ]] && DASHBOARD_URL="$(openclaw dashboard --no-open 2>/dev/null | grep -oE 'https?://[^ ]+' | head -1 || true)"
 fi
 
 # =============================================================================
